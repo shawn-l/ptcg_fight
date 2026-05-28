@@ -1,4 +1,4 @@
-import type { GameEvent, GameState, PlayerId } from "./types";
+import type { GameEvent, GameState, PlayerId, PokemonSlot } from "./types";
 
 type EventInput = Omit<GameEvent, "seq">;
 
@@ -23,4 +23,12 @@ export function placeDamageOnActive(
   if (!active) return undefined;
   active.damage += amount;
   return { totalDamage: active.damage };
+}
+
+export function placeDamageOnSlot(
+  slot: PokemonSlot,
+  amount: number
+): { totalDamage: number } {
+  slot.damage += amount;
+  return { totalDamage: slot.damage };
 }

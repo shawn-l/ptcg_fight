@@ -74,21 +74,36 @@ function App() {
           <div className="choice-panel">
             <strong>{state.pendingChoice.prompt}</strong>
             <div className="action-grid">
-              {state.pendingChoice.options.map((option) => (
+              {state.pendingChoice.options.length === 0 && state.pendingChoice.minSelections === 0 ? (
                 <button
-                  key={option.id}
                   onClick={() =>
                     dispatch({
                       playerId: viewer,
                       type: "RESOLVE_CHOICE",
-                      payload: { choiceId: state.pendingChoice!.id, selectedOptionIds: [option.id] },
-                      clientActionId: `choice-${Date.now()}-${option.id}`
+                      payload: { choiceId: state.pendingChoice!.id, selectedOptionIds: [] },
+                      clientActionId: `choice-${Date.now()}-none`
                     })
                   }
                 >
-                  {option.label}
+                  Confirm (no valid targets)
                 </button>
-              ))}
+              ) : (
+                state.pendingChoice.options.map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() =>
+                      dispatch({
+                        playerId: viewer,
+                        type: "RESOLVE_CHOICE",
+                        payload: { choiceId: state.pendingChoice!.id, selectedOptionIds: [option.id] },
+                        clientActionId: `choice-${Date.now()}-${option.id}`
+                      })
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))
+              )}
             </div>
           </div>
         ) : null}

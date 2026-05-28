@@ -69,11 +69,12 @@ export type GameState = {
 export type PendingChoice = {
   id: string;
   playerId: PlayerId;
-  kind: "DISCARD_FROM_HAND" | "SEARCH_DECK";
+  kind: "DISCARD_FROM_HAND" | "SEARCH_DECK" | "SELECT_POKEMON" | "SEARCH_DISCARD" | "OPTIONAL_EFFECT";
   prompt: string;
   minSelections: number;
   maxSelections: number;
   options: ChoiceOption[];
+  remainingSteps?: EffectStep[];
   resolution:
     | {
         type: "DISCARD_THEN_DRAW";
@@ -83,6 +84,25 @@ export type PendingChoice = {
     | {
         type: "MOVE_FROM_DECK_TO_HAND";
         shuffleAfter: boolean;
+        sourceActionId: string;
+      }
+    | {
+        type: "DAMAGE_TO_SELECTED_POKEMON";
+        amount: number;
+        sourceActionId: string;
+      }
+    | {
+        type: "MOVE_FROM_DISCARD_TO_HAND";
+        sourceActionId: string;
+      }
+    | {
+        type: "MOVE_FROM_DISCARD_TO_DECK";
+        shuffleAfter: boolean;
+        sourceActionId: string;
+      }
+    | {
+        type: "OPTIONAL_EFFECT";
+        yesSteps: EffectStep[];
         sourceActionId: string;
       };
 };
@@ -226,9 +246,26 @@ export type EffectStep =
       type: "choice";
       kind: "SEARCH_DECK";
       count: number;
-      filter: { supertype?: CardDefinition["supertype"]; subtypes?: string[] };
+      minCount?: number;
+      filter: { supertype?: CardDefinition["supertype"]; subtypes?: string[] }[];
       then: { type: "move-to-hand"; shuffleAfter: boolean };
-    };
+    }
+  | {
+      type: "choice";
+      kind: "SELECT_POKEMON";
+      count: number;
+      filter: { player: "self" | "opponent"; zones: ("active" | "bench")[] };
+      then: { type: "damage-to-selected"; amount: number };
+    }
+  | {
+      type: "choice";
+      kind: "SEARCH_DISCARD";
+      count: number;
+      minCount?: number;
+      filter: { supertype?: CardDefinition["supertype"]; subtypes?: string[] }[];
+      then: { type: "move-to-hand" } | { type: "move-to-deck"; shuffleAfter: boolean };
+    }
+  | { type: "choice"; kind: "OPTIONAL_EFFECT"; prompt: string; then: EffectStep[] };
 
 export type PublicPlayerState = Omit<PlayerState, "hand" | "deck" | "prizes"> & {
   hand: string[] | { count: number };

@@ -10,8 +10,8 @@ import type {
   ResolveResult
 } from "./types";
 import { cloneState } from "./state";
-import { applyEffect } from "./effects";
-import { moveTopDeckCardToHand, nextEvent, placeDamageOnActive } from "./mutations";
+import { applyEffect, applyEffectSteps } from "./effects";
+import { moveTopDeckCardToHand, nextEvent, placeDamageOnActive, placeDamageOnSlot } from "./mutations";
 
 export function getLegalActions(state: GameState, playerId: PlayerId): LegalActionDescriptor[] {
   const player = state.players[playerId];
@@ -462,6 +462,175 @@ function resolveChoice(
     }
   }
 
+  if (choice.resolution.type === "DAMAGE_TO_SELECTED_POKEMON") {
+    for (const optionId of selectedOptionIds) {
+      const slot = resolveSlotFromChoiceOptionId(state, optionId);
+      if (!slot) {
+        return failure(
+          state,
+          "INVALID_CHOICE_SELECTION",
+          "Selected Pokemon slot no longer exists"
+        );
+      }
+      const option = choice.options.find((c) => c.id === optionId);
+      if (option?.cardInstanceId && slot.cardInstanceId !== option.cardInstanceId) {
+        return failure(
+          state,
+          "INVALID_CHOICE_SELECTION",
+          "Pokemon in selected slot has changed"
+        );
+      }
+    }
+
+    state.pendingChoice = undefined;
+    events.push(
+      nextEvent(state, {
+        type: "CHOICE_RESOLVED",
+        payload: { choiceId: choice.id, playerId: action.playerId, selectedOptionIds },
+        visibility: { playerId: action.playerId },
+        sourceActionId: action.clientActionId
+      })
+    );
+
+    for (const optionId of selectedOptionIds) {
+      const slot = resolveSlotFromChoiceOptionId(state, optionId);
+      if (!slot) continue;
+      const parsed = parseChoiceOptionId(optionId);
+      placeDamageOnSlot(slot, choice.resolution.amount);
+      events.push(
+        nextEvent(state, {
+          type: "DAMAGE_PLACED",
+          payload: {
+            playerId: parsed.playerId,
+            amount: choice.resolution.amount,
+            totalDamage: slot.damage,
+            target: parsed.zone === "active"
+              ? { playerId: parsed.playerId, zone: "active" as const }
+              : { playerId: parsed.playerId, zone: "bench" as const, index: parsed.index! }
+          },
+          visibility: "public",
+          sourceActionId: action.clientActionId
+        })
+      );
+    }
+
+    checkKnockOuts(state, events, action.clientActionId, action.playerId);
+  }
+
+  if (choice.resolution.type === "MOVE_FROM_DISCARD_TO_HAND") {
+    const player = state.players[action.playerId];
+    const selectedOptions = selectedOptionIds.map((optionId) =>
+      choice.options.find((c) => c.id === optionId)
+    );
+    for (const option of selectedOptions) {
+      if (!option?.cardInstanceId || !player.discard.includes(option.cardInstanceId)) {
+        return failure(state, "INVALID_CHOICE_SELECTION", "Selected card is no longer in discard");
+      }
+    }
+
+    state.pendingChoice = undefined;
+    events.push(
+      nextEvent(state, {
+        type: "CHOICE_RESOLVED",
+        payload: { choiceId: choice.id, playerId: action.playerId, selectedOptionIds },
+        visibility: { playerId: action.playerId },
+        sourceActionId: action.clientActionId
+      })
+    );
+
+    for (const option of selectedOptions) {
+      const cardInstanceId = option?.cardInstanceId;
+      if (!cardInstanceId) continue;
+      player.discard = player.discard.filter((c) => c !== cardInstanceId);
+      player.hand.push(cardInstanceId);
+      events.push(
+        nextEvent(state, {
+          type: "CARD_MOVED",
+          payload: { playerId: action.playerId, cardInstanceId, from: "discard", to: "hand" },
+          visibility: "public",
+          sourceActionId: action.clientActionId
+        })
+      );
+    }
+  }
+
+  if (choice.resolution.type === "MOVE_FROM_DISCARD_TO_DECK") {
+    const player = state.players[action.playerId];
+    const selectedOptions = selectedOptionIds.map((optionId) =>
+      choice.options.find((c) => c.id === optionId)
+    );
+    for (const option of selectedOptions) {
+      if (!option?.cardInstanceId || !player.discard.includes(option.cardInstanceId)) {
+        return failure(state, "INVALID_CHOICE_SELECTION", "Selected card is no longer in discard");
+      }
+    }
+
+    state.pendingChoice = undefined;
+    events.push(
+      nextEvent(state, {
+        type: "CHOICE_RESOLVED",
+        payload: { choiceId: choice.id, playerId: action.playerId, selectedOptionIds },
+        visibility: { playerId: action.playerId },
+        sourceActionId: action.clientActionId
+      })
+    );
+
+    for (const option of selectedOptions) {
+      const cardInstanceId = option?.cardInstanceId;
+      if (!cardInstanceId) continue;
+      player.discard = player.discard.filter((c) => c !== cardInstanceId);
+      player.deck.push(cardInstanceId);
+      events.push(
+        nextEvent(state, {
+          type: "CARD_MOVED",
+          payload: { playerId: action.playerId, cardInstanceId, from: "discard", to: "deck" },
+          visibility: { playerId: action.playerId },
+          sourceActionId: action.clientActionId
+        })
+      );
+    }
+
+    if (choice.resolution.shuffleAfter) {
+      player.deck = shuffleDeckDeterministically(player.deck, `${state.seed}:${choice.id}:${action.clientActionId}`);
+      events.push(
+        nextEvent(state, {
+          type: "DECK_SHUFFLED",
+          payload: { playerId: action.playerId },
+          visibility: "public",
+          sourceActionId: action.clientActionId
+        })
+      );
+    }
+  }
+
+  if (choice.resolution.type === "OPTIONAL_EFFECT") {
+    state.pendingChoice = undefined;
+    if (selectedOptionIds.includes("yes")) {
+      events.push(...applyEffectSteps(state, choice.resolution.yesSteps, action.playerId, action.clientActionId));
+    } else {
+      choice.remainingSteps = undefined;
+    }
+    events.push(
+      nextEvent(state, {
+        type: "CHOICE_RESOLVED",
+        payload: { choiceId: choice.id, playerId: action.playerId, selectedOptionIds },
+        visibility: { playerId: action.playerId },
+        sourceActionId: action.clientActionId
+      })
+    );
+  }
+
+  if (choice.remainingSteps && choice.remainingSteps.length > 0) {
+    if (state.pendingChoice) {
+      state.pendingChoice.remainingSteps = [
+        ...choice.remainingSteps,
+        ...(state.pendingChoice.remainingSteps ?? [])
+      ];
+    } else {
+      events.push(...applyEffectSteps(state, choice.remainingSteps, action.playerId, action.clientActionId));
+    }
+  }
+
   return { ok: true, state, events };
 }
 
@@ -673,6 +842,10 @@ function attack(
     events.push(...applyEffect(state, attackDefinition.effectRef, action.playerId, action.clientActionId));
   }
 
+  if (state.pendingChoice) {
+    return { ok: true, state, events };
+  }
+
   if (state.phase === "game-over") {
     return { ok: true, state, events };
   }
@@ -719,48 +892,83 @@ function passTurn(
 
 function checkKnockOuts(state: GameState, events: GameEvent[], sourceActionId: string, attackingPlayerId: PlayerId): void {
   for (const player of Object.values(state.players)) {
-    if (!player.active) continue;
-    const card = getCardForInstance(state, player.active.cardInstanceId);
-    if (!card?.hp || player.active.damage < card.hp) continue;
-    const knockedOut = player.active;
-    const prizesToTake = getPrizeCardsForKnockOut(state, knockedOut);
-    player.discard.push(...knockedOut.evolution, knockedOut.cardInstanceId, ...knockedOut.attachedEnergy);
+    if (player.active) {
+      const card = getCardForInstance(state, player.active.cardInstanceId);
+      if (card?.hp && player.active.damage >= card.hp) {
+        handleKnockOut(state, events, player.id, player.active, "active", -1, sourceActionId, attackingPlayerId);
+      }
+    }
+    for (let i = player.bench.length - 1; i >= 0; i--) {
+      const slot = player.bench[i];
+      const card = getCardForInstance(state, slot.cardInstanceId);
+      if (card?.hp && slot.damage >= card.hp) {
+        handleKnockOut(state, events, player.id, slot, "bench", i, sourceActionId, attackingPlayerId);
+      }
+    }
+  }
+}
+
+function handleKnockOut(
+  state: GameState,
+  events: GameEvent[],
+  playerId: PlayerId,
+  slot: PokemonSlot,
+  zone: "active" | "bench",
+  benchIndex: number,
+  sourceActionId: string,
+  attackingPlayerId: PlayerId
+): void {
+  const player = state.players[playerId];
+  const prizesToTake = getPrizeCardsForKnockOut(state, slot);
+  player.discard.push(...slot.evolution, slot.cardInstanceId, ...slot.attachedEnergy);
+
+  if (zone === "active") {
     player.active = undefined;
+  } else {
+    player.bench.splice(benchIndex, 1);
+  }
+
+  events.push(
+    nextEvent(state, {
+      type: "POKEMON_KNOCKED_OUT",
+      payload: {
+        playerId,
+        cardInstanceId: slot.cardInstanceId,
+        ...(zone === "bench" ? { zone: "bench", benchIndex } : {})
+      },
+      visibility: "public",
+      sourceActionId
+    })
+  );
+
+  const attacker = state.players[attackingPlayerId];
+  const takenPrizeCards = attacker.prizes.splice(0, prizesToTake);
+  if (takenPrizeCards.length > 0) {
+    attacker.hand.push(...takenPrizeCards);
     events.push(
       nextEvent(state, {
-        type: "POKEMON_KNOCKED_OUT",
-        payload: { playerId: player.id, cardInstanceId: knockedOut.cardInstanceId },
-        visibility: "public",
+        type: "PRIZE_TAKEN",
+        payload: {
+          playerId: attackingPlayerId,
+          takenCount: takenPrizeCards.length,
+          cardInstanceIds: takenPrizeCards,
+          remainingPrizes: attacker.prizes.length
+        },
+        visibility: { playerId: attackingPlayerId },
         sourceActionId
       })
     );
-    const attacker = state.players[attackingPlayerId];
-    const takenPrizeCards = attacker.prizes.splice(0, prizesToTake);
-    if (takenPrizeCards.length > 0) {
-      attacker.hand.push(...takenPrizeCards);
-      events.push(
-        nextEvent(state, {
-          type: "PRIZE_TAKEN",
-          payload: {
-            playerId: attackingPlayerId,
-            takenCount: takenPrizeCards.length,
-            cardInstanceIds: takenPrizeCards,
-            remainingPrizes: attacker.prizes.length
-          },
-          visibility: { playerId: attackingPlayerId },
-          sourceActionId
-        })
-      );
-      if (attacker.prizes.length === 0) {
-        endGame(state, events, attackingPlayerId, "NO_PRIZES_REMAINING", sourceActionId);
-      }
+    if (attacker.prizes.length === 0) {
+      endGame(state, events, attackingPlayerId, "NO_PRIZES_REMAINING", sourceActionId);
+      return;
     }
-    if (state.phase !== "game-over") {
-      if (player.bench.length === 0) {
-        endGame(state, events, attackingPlayerId, "NO_POKEMON_IN_PLAY", sourceActionId);
-      } else {
-        state.pendingPromotionPlayerId = player.id;
-      }
+  }
+
+  if (zone === "active" && state.phase !== "game-over") {
+    if (player.bench.length === 0) {
+      endGame(state, events, attackingPlayerId, "NO_POKEMON_IN_PLAY", sourceActionId);
+    } else {
+      state.pendingPromotionPlayerId = playerId;
     }
   }
 }
@@ -924,6 +1132,43 @@ function resolveTargetSlot(state: GameState, target: ActionTarget): PokemonSlot 
   if (!player) return undefined;
   if (target.zone === "active") return player.active;
   return player.bench[target.index];
+}
+
+function parseChoiceOptionId(optionId: string): {
+  playerId: string;
+  zone: "active" | "bench";
+  index?: number;
+} {
+  const parts = optionId.split(":");
+  if (parts.length === 2 && parts[1] === "active") {
+    return { playerId: parts[0], zone: "active" };
+  }
+  if (parts.length === 3 && parts[1] === "bench") {
+    const index = parseInt(parts[2], 10);
+    if (Number.isNaN(index)) {
+      throw new Error(`Invalid bench index in choice option ID: ${optionId}`);
+    }
+    return { playerId: parts[0], zone: "bench", index };
+  }
+  throw new Error(`Invalid choice option ID format: ${optionId}`);
+}
+
+function resolveSlotFromChoiceOptionId(
+  state: GameState,
+  optionId: string
+): PokemonSlot | undefined {
+  try {
+    const parsed = parseChoiceOptionId(optionId);
+    const player = state.players[parsed.playerId];
+    if (!player) return undefined;
+    if (parsed.zone === "active") return player.active;
+    if (parsed.zone === "bench" && parsed.index !== undefined) {
+      return player.bench[parsed.index];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function failure(state: GameState, code: string, message: string): ResolveResult {
