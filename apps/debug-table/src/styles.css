@@ -158,6 +158,43 @@ button:hover {
   background: #f8fafc;
 }
 
+.choice-options {
+  display: grid;
+  gap: 8px;
+}
+
+.choice-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #ffffff;
+  font-weight: 650;
+}
+
+.choice-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.choice-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #526071;
+  font-size: 13px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 pre {
   overflow: auto;
   margin: 8px 0 0;

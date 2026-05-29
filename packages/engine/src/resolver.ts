@@ -605,11 +605,6 @@ function resolveChoice(
 
   if (choice.resolution.type === "OPTIONAL_EFFECT") {
     state.pendingChoice = undefined;
-    if (selectedOptionIds.includes("yes")) {
-      events.push(...applyEffectSteps(state, choice.resolution.yesSteps, action.playerId, action.clientActionId));
-    } else {
-      choice.remainingSteps = undefined;
-    }
     events.push(
       nextEvent(state, {
         type: "CHOICE_RESOLVED",
@@ -618,6 +613,11 @@ function resolveChoice(
         sourceActionId: action.clientActionId
       })
     );
+    if (selectedOptionIds.includes("yes")) {
+      events.push(...applyEffectSteps(state, choice.resolution.yesSteps, action.playerId, action.clientActionId));
+    } else {
+      choice.remainingSteps = undefined;
+    }
   }
 
   if (choice.remainingSteps && choice.remainingSteps.length > 0) {

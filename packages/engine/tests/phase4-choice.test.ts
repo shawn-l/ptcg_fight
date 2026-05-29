@@ -1588,4 +1588,103 @@ describe("multi-stage choice flow", () => {
     expect(resolved.events.map((e) => e.type)).not.toContain("CARD_DRAWN");
     expect(resolved.state.players.p1.hand.length).toBe(handBefore - 1);
   });
+
+  it("OPTIONAL_EFFECT Yes can create a choice and then continue remainingSteps", () => {
+    const optionalRetrieveTrainer: CardDefinition = {
+      id: "test-optional-retrieve-then-draw",
+      languageRefs: {
+        en: { name: "Optional Rescue Draw", rulesText: "You may put a Basic Pokemon from your discard pile into your hand. Draw 1 card." },
+        zhHans: { name: "可选救援抽牌", rulesText: "你可以将弃牌区的1张基础宝可梦加入手牌。抽1张卡。" }
+      },
+      regulationMark: "G",
+      supertype: "Trainer",
+      subtypes: ["Item"],
+      rulesText: ["You may put a Basic Pokemon from your discard pile into your hand. Draw 1 card."],
+      effectRefs: ["trainer.optional-retrieve-basic-then-draw.1"]
+    };
+    const cards = [...sampleCards, optionalRetrieveTrainer];
+    const deck = [
+      "sv1-001",
+      "sv1-002",
+      "sv1-003",
+      "sv1-004",
+      "test-optional-retrieve-then-draw",
+      "sv1-006",
+      "sv1-007",
+      "sv1-008",
+      "sv1-009",
+      "sv1-011",
+      "sv1-012",
+      "sv1-013"
+    ];
+    let state = createInitialState({
+      players: [
+        { id: "p1", name: "Player 1", deck },
+        { id: "p2", name: "Player 2", deck: p2Deck }
+      ],
+      cards,
+      seed: "phase4-optional-retrieve",
+      ruleset: { prizeCount: 2 }
+    });
+
+    for (const [playerId, cardInstanceId] of [["p1", "p1-card-1"], ["p2", "p2-card-1"]] as const) {
+      const placed = resolveAction(state, {
+        playerId,
+        type: "PLACE_ACTIVE",
+        payload: { cardInstanceId },
+        clientActionId: `active-${playerId}`
+      });
+      if (!placed.ok) throw new Error(placed.error.message);
+      state = placed.state;
+    }
+    const started = resolveAction(state, { playerId: "p1", type: "START_GAME", payload: {}, clientActionId: "start" });
+    if (!started.ok) throw new Error(started.error.message);
+    state = started.state;
+
+    const discardTargetId = state.players.p1.hand.find((id: string) => {
+      const cardId = state.instances[id]?.cardId;
+      const card = cardId ? state.cards[cardId] : undefined;
+      return card?.supertype === "Pokemon" && card.subtypes.includes("Basic");
+    });
+    if (!discardTargetId) throw new Error("expected a Basic Pokemon in hand");
+    const trainerId = state.players.p1.hand.find((id: string) => state.instances[id]?.cardId === "test-optional-retrieve-then-draw");
+    if (!trainerId) throw new Error("expected optional retrieve trainer in hand");
+    state.players.p1.hand = state.players.p1.hand.filter((id: string) => id !== discardTargetId);
+    state.players.p1.discard.push(discardTargetId);
+
+    const played = resolveAction(state, {
+      playerId: "p1",
+      type: "PLAY_TRAINER",
+      payload: { cardInstanceId: trainerId },
+      clientActionId: "optional-retrieve"
+    });
+    expect(played.ok).toBe(true);
+    if (!played.ok) return;
+    expect(played.state.pendingChoice?.kind).toBe("OPTIONAL_EFFECT");
+
+    const yesResolved = resolveAction(played.state, {
+      playerId: "p1",
+      type: "RESOLVE_CHOICE",
+      payload: { choiceId: played.state.pendingChoice!.id, selectedOptionIds: ["yes"] },
+      clientActionId: "optional-yes"
+    });
+    expect(yesResolved.ok).toBe(true);
+    if (!yesResolved.ok) return;
+    expect(yesResolved.events.map((event) => event.type)).toEqual(["CHOICE_RESOLVED", "CHOICE_REQUESTED"]);
+    expect(yesResolved.state.pendingChoice?.kind).toBe("SEARCH_DISCARD");
+    expect(yesResolved.state.pendingChoice?.remainingSteps).toMatchObject([{ type: "draw", count: 1 }]);
+
+    const retrieveResolved = resolveAction(yesResolved.state, {
+      playerId: "p1",
+      type: "RESOLVE_CHOICE",
+      payload: { choiceId: yesResolved.state.pendingChoice!.id, selectedOptionIds: [discardTargetId] },
+      clientActionId: "resolve-retrieve"
+    });
+    expect(retrieveResolved.ok).toBe(true);
+    if (!retrieveResolved.ok) return;
+    expect(retrieveResolved.state.pendingChoice).toBeUndefined();
+    expect(retrieveResolved.state.players.p1.discard).not.toContain(discardTargetId);
+    expect(retrieveResolved.state.players.p1.hand).toContain(discardTargetId);
+    expect(retrieveResolved.events.map((event) => event.type)).toEqual(["CHOICE_RESOLVED", "CARD_MOVED", "CARD_DRAWN"]);
+  });
 });

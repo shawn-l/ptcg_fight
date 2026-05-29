@@ -3,9 +3,13 @@ import type { CardDefinition } from "@ptcg-fight/cards";
 import {
   createInitialState,
   type GameAction,
+  type GameEvent,
+  type PlayerId,
+  type PublicGameState,
   type GameState,
   type ResolveResult,
-  resolveAction
+  resolveAction,
+  serializePublicState
 } from "@ptcg-fight/engine";
 
 const p1Deck = ["sv1-001", "sv1-002", "sv1-003", "sv1-004", "sv1-005", "sv1-006", "sv1-007", "sv1-008", "sv1-009", "sv1-nest-search"];
@@ -36,6 +40,10 @@ export type RoomStore = {
   getRoom: (id: string) => Room | undefined;
   dispatch: (id: string, action: GameAction) => ResolveResult;
 };
+
+export type VisibleResolveResult =
+  | { ok: true; state: PublicGameState; events: GameEvent[] }
+  | { ok: false; state: PublicGameState; error: Extract<ResolveResult, { ok: false }>["error"] };
 
 export function createRoomStore(): RoomStore {
   const rooms = new Map<string, Room>();
@@ -72,6 +80,21 @@ export function createRoomStore(): RoomStore {
       }
       return result;
     }
+  };
+}
+
+export function serializeResolveResultForViewer(result: ResolveResult, viewer: PlayerId): VisibleResolveResult {
+  if (!result.ok) {
+    return {
+      ok: false,
+      state: serializePublicState(result.state, viewer),
+      error: result.error
+    };
+  }
+  return {
+    ok: true,
+    state: serializePublicState(result.state, viewer),
+    events: result.events.filter((event) => event.visibility === "public" || event.visibility.playerId === viewer)
   };
 }
 

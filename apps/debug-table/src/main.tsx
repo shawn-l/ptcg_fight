@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { sampleCards } from "@ptcg-fight/cards";
 import {
@@ -32,8 +32,14 @@ function App() {
   const [viewer, setViewer] = useState<PlayerId>("p1");
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selectedChoiceIds, setSelectedChoiceIds] = useState<string[]>([]);
   const visibleState = useMemo(() => serializePublicState(state, viewer), [state, viewer]);
   const legalActions = getLegalActions(state, viewer);
+  const pendingChoice = state.pendingChoice?.playerId === viewer ? state.pendingChoice : undefined;
+
+  useEffect(() => {
+    setSelectedChoiceIds([]);
+  }, [state.pendingChoice?.id]);
 
   const dispatch = (action: GameAction) => {
     const result = resolveAction(state, action);
@@ -45,6 +51,32 @@ function App() {
     setState(result.state);
     setEvents((existing) => [...result.events, ...existing].slice(0, 30));
   };
+
+  const resolveChoice = (selectedOptionIds: string[]) => {
+    if (!pendingChoice) return;
+    dispatch({
+      playerId: viewer,
+      type: "RESOLVE_CHOICE",
+      payload: { choiceId: pendingChoice.id, selectedOptionIds },
+      clientActionId: `choice-${Date.now()}`
+    });
+  };
+
+  const toggleChoice = (optionId: string) => {
+    if (!pendingChoice) return;
+    setSelectedChoiceIds((existing) => {
+      if (existing.includes(optionId)) return existing.filter((id) => id !== optionId);
+      if (existing.length >= pendingChoice.maxSelections) return existing;
+      return [...existing, optionId];
+    });
+  };
+
+  const choiceSelectionValid =
+    pendingChoice &&
+    selectedChoiceIds.length >= pendingChoice.minSelections &&
+    selectedChoiceIds.length <= pendingChoice.maxSelections;
+  const usesMultiSelect =
+    pendingChoice && (pendingChoice.maxSelections > 1 || pendingChoice.minSelections === 0);
 
   return (
     <main>
@@ -70,41 +102,55 @@ function App() {
 
       <section className="actions">
         <h2>Legal Actions for {viewer}</h2>
-        {state.pendingChoice?.playerId === viewer ? (
+        {pendingChoice ? (
           <div className="choice-panel">
-            <strong>{state.pendingChoice.prompt}</strong>
-            <div className="action-grid">
-              {state.pendingChoice.options.length === 0 && state.pendingChoice.minSelections === 0 ? (
-                <button
-                  onClick={() =>
-                    dispatch({
-                      playerId: viewer,
-                      type: "RESOLVE_CHOICE",
-                      payload: { choiceId: state.pendingChoice!.id, selectedOptionIds: [] },
-                      clientActionId: `choice-${Date.now()}-none`
-                    })
-                  }
-                >
-                  Confirm (no valid targets)
-                </button>
+            <strong>{pendingChoice.prompt}</strong>
+            {usesMultiSelect ? (
+              pendingChoice.options.length === 0 && pendingChoice.minSelections === 0 ? (
+                <div className="choice-footer">
+                  <span>No valid targets</span>
+                  <button onClick={() => resolveChoice([])}>Confirm (no valid targets)</button>
+                </div>
               ) : (
-                state.pendingChoice.options.map((option) => (
-                  <button
-                    key={option.id}
-                    onClick={() =>
-                      dispatch({
-                        playerId: viewer,
-                        type: "RESOLVE_CHOICE",
-                        payload: { choiceId: state.pendingChoice!.id, selectedOptionIds: [option.id] },
-                        clientActionId: `choice-${Date.now()}-${option.id}`
-                      })
-                    }
-                  >
-                    {option.label}
+                <>
+                  <div className="choice-options">
+                    {pendingChoice.options.map((option) => (
+                      <label key={option.id} className="choice-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedChoiceIds.includes(option.id)}
+                          disabled={!selectedChoiceIds.includes(option.id) && selectedChoiceIds.length >= pendingChoice.maxSelections}
+                          onChange={() => toggleChoice(option.id)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="choice-footer">
+                    <span>
+                      {selectedChoiceIds.length} selected · choose {pendingChoice.minSelections}-{pendingChoice.maxSelections}
+                    </span>
+                    <button disabled={!choiceSelectionValid} onClick={() => resolveChoice(selectedChoiceIds)}>
+                      Confirm
+                    </button>
+                  </div>
+                </>
+              )
+            ) : (
+              <div className="action-grid">
+                {pendingChoice.options.length === 0 && pendingChoice.minSelections === 0 ? (
+                  <button onClick={() => resolveChoice([])}>
+                    Confirm (no valid targets)
                   </button>
-                ))
-              )}
-            </div>
+                ) : (
+                  pendingChoice.options.map((option) => (
+                    <button key={option.id} onClick={() => resolveChoice([option.id])}>
+                      {option.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         ) : null}
         <div className="action-grid">

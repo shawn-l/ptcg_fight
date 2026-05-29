@@ -102,6 +102,27 @@ export const effectRegistry: Record<string, EffectDefinition> = {
       { type: "draw", player: "self", count: 1 }
     ]
   },
+  "trainer.optional-retrieve-basic-then-draw.1": {
+    id: "trainer.optional-retrieve-basic-then-draw.1",
+    trigger: "trainer-played",
+    steps: [
+      {
+        type: "choice",
+        kind: "OPTIONAL_EFFECT",
+        prompt: "Put a Basic Pokemon from your discard pile into your hand?",
+        then: [
+          {
+            type: "choice",
+            kind: "SEARCH_DISCARD",
+            count: 1,
+            filter: [{ supertype: "Pokemon", subtypes: ["Basic"] }],
+            then: { type: "move-to-hand" }
+          }
+        ]
+      },
+      { type: "draw", player: "self", count: 1 }
+    ]
+  },
   "trainer.draw.2-optional": {
     id: "trainer.draw.2-optional",
     trigger: "trainer-played",
